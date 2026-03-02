@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-coding-agent.local/schemas/permissions.schema.json",
+  "title": "PI Permission Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "defaultPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tools", "bash", "mcp", "skills"],
+      "properties": {
+        "tools": {
+          "$ref": "#/$defs/permissionState"
+        },
+        "bash": {
+          "$ref": "#/$defs/permissionState"
+        },
+        "mcp": {
+          "$ref": "#/$defs/permissionState"
+        },
+        "skills": {
+          "$ref": "#/$defs/permissionState"
+        },
+        "special": {
+          "$ref": "#/$defs/permissionState"
+        }
+      }
+    },
+    "tools": {
+      "$ref": "#/$defs/permissionMap"
+    },
+    "bash": {
+      "$ref": "#/$defs/permissionMap"
+    },
+    "mcp": {
+      "$ref": "#/$defs/permissionMap"
+    },
+    "skills": {
+      "$ref": "#/$defs/permissionMap"
+    },
+    "special": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doom_loop": {
+          "$ref": "#/$defs/permissionState"
+        },
+        "external_directory": {
+          "$ref": "#/$defs/permissionState"
+        },
+        "tool_call_limit": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/permissionState"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        }
+      }
+    }
+  },
+  "required": ["defaultPolicy"],
+  "$defs": {
+    "permissionState": {
+      "type": "string",
+      "enum": ["allow", "deny", "ask"]
+    },
+    "permissionMap": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/permissionState"
+      }
+    }
+  }
+}
