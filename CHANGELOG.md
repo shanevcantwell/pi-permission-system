@@ -5,7 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.7] - 2026-03-10
+
+### Added
+- `src/common.ts` — Shared utility module with `toRecord()`, `getNonEmptyString()`, `isPermissionState()`, `parseSimpleYamlMap()`, `extractFrontmatter()`
+- `src/wildcard-matcher.ts` — Wildcard pattern compilation and matching with specificity sorting
+- File stamp caching in `PermissionManager` for improved performance
+- `tools.mcp` fallback permission for MCP operations
+- MCP tool permission targets now inferred from configured server names in `mcp.json`
+
+### Changed
+- Refactored `bash-filter.ts` to use shared `wildcard-matcher.ts` module
+- Refactored `index.ts` to use shared `common.ts` utilities
+- Refactored `permission-manager.ts` to use shared modules and caching
+- Pre-compiled wildcard patterns are now reused across permission checks
+- Updated README architecture documentation to reflect new module organization
+
+### Tests
+- Added tests for MCP proxy tool inferring server-prefixed aliases from configured server names
+- Added tests for `tools.mcp` fallback behavior
+- Added tests for `task` using tool permissions instead of MCP fallback
 
 ## [0.1.6] - 2026-03-09
 

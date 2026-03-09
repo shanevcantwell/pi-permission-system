@@ -1,6 +1,6 @@
 # 🔐 pi-permission-system
 
-[![Version](https://img.shields.io/badge/version-0.1.6-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.7-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Permission enforcement extension for the Pi coding agent that provides centralized, deterministic permission gates for tool, bash, MCP, skill, and special operations.
@@ -111,15 +111,21 @@ permission:
   tools:
     read: allow
     write: deny
+    mcp: allow
   bash:
     git status: allow
     git *: ask
+  mcp:
+    chrome_devtools_*: deny
+    exa_*: allow
   skills:
     "*": ask
 ---
 ```
 
 **Precedence:** Agent frontmatter overrides global config (shallow-merged per section).
+
+**MCP behavior:** `permission.tools.mcp` is the coarse entry/fallback permission for the built-in `mcp` tool. More specific `permission.mcp` target rules override that fallback when they match.
 
 **Limitations:** The frontmatter parser is intentionally minimal. Use only `key: value` scalars and nested maps. Avoid arrays, multi-line scalars, and YAML anchors.
 
@@ -156,18 +162,22 @@ Controls built-in tools by exact name (no wildcards):
 | `grep`  | Pattern searching              |
 | `find`  | File discovery                 |
 | `ls`    | Directory listing              |
+| `mcp`   | MCP proxy tool entry/fallback  |
 
 ```jsonc
 {
   "tools": {
     "read": "allow",
     "write": "deny",
-    "edit": "deny"
+    "edit": "deny",
+    "mcp": "allow"
   }
 }
 ```
 
 > **Note:** Setting `tools.bash` affects the *default* for bash commands, but `bash` patterns can provide command-level overrides.
+>
+> **Note:** Setting `tools.mcp` controls coarse access to the built-in `mcp` tool. Specific `mcp` rules still override it when a target pattern matches.
 
 ### `bash`
 
@@ -190,7 +200,7 @@ Command patterns use `*` wildcards and match against the full command string. Pa
 
 ### `mcp`
 
-MCP permissions match against derived targets from tool input:
+MCP permissions match against derived targets from tool input. These rules are more specific than `tools.mcp` and override that fallback when a pattern matches:
 
 | Target Type       | Examples                                    |
 |-------------------|---------------------------------------------|
@@ -211,6 +221,35 @@ MCP permissions match against derived targets from tool input:
 ```
 
 > **Note:** Baseline discovery targets may auto-allow when you permit any MCP rule.
+
+#### MCP Tool Fallback via `tools.mcp`
+
+The `mcp` built-in tool can use `tools.mcp` as an entry permission point. This provides a fallback when no specific MCP pattern matches:
+
+```jsonc
+{
+  "tools": {
+    "mcp": "allow"
+  }
+}
+```
+
+This is useful for per-agent configurations where you want to grant MCP access broadly:
+
+```yaml
+# In ~/.pi/agent/agents/researcher.md
+---
+name: researcher
+permission:
+  tools:
+    mcp: allow
+---
+```
+
+The permission resolution order for MCP operations:
+1. Specific `mcp` patterns (e.g., `myServer:toolName`, `myServer_*`)
+2. `tools.mcp` fallback (if set)
+3. `defaultPolicy.mcp`
 
 ### `skills`
 
@@ -324,8 +363,10 @@ This keeps `ask` policies usable even when the original permission check happens
 index.ts                    → Root Pi entrypoint shim
 src/
 ├── index.ts                → Extension bootstrap, permission checks, and subagent forwarding
-├── permission-manager.ts   → Policy loading, merging, and resolution
-├── bash-filter.ts          → Wildcard pattern matching with specificity sorting
+├── permission-manager.ts   → Policy loading, merging, and resolution with caching
+├── bash-filter.ts          → Bash command wildcard pattern matching
+├── wildcard-matcher.ts     → Shared wildcard pattern compilation and matching
+├── common.ts               → Shared utilities (YAML parsing, type guards, etc.)
 ├── tool-registry.ts        → Registered tool name resolution
 ├── types.ts                → TypeScript type definitions
 └── test.ts                 → Test runner
@@ -334,6 +375,23 @@ schemas/
 config/
 └── config.example.json     → Starter configuration template
 ```
+
+#### Module Organization
+
+The extension uses a modular architecture with shared utilities:
+
+| Module | Purpose |
+|--------|---------|
+| `common.ts` | Shared utilities: `toRecord()`, `getNonEmptyString()`, `isPermissionState()`, `parseSimpleYamlMap()`, `extractFrontmatter()` |
+| `wildcard-matcher.ts` | Compile-once wildcard patterns with specificity sorting: `compileWildcardPatterns()`, `findCompiledWildcardMatch()` |
+| `permission-manager.ts` | Policy resolution with file stamp caching for performance |
+| `bash-filter.ts` | Uses shared wildcard matcher for bash command patterns |
+
+#### Performance Optimizations
+
+- **File stamp caching**: Configurations are cached with file modification timestamps to avoid redundant reads
+- **Pre-compiled patterns**: Wildcard patterns are compiled to regex once and reused across permission checks
+- **Resolved permissions caching**: Merged agent+global permissions are cached per-agent with invalidation on file changes
 
 ### Threat Model
 
