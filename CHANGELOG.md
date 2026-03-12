@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-03-13
+
+### Changed
+- Removed delegation task restriction logic — the `task` tool is no longer restricted to orchestrator agent only
+- Simplified tool permission lookup to use explicit `tools` entries for arbitrary registered tools instead of MCP fallback
+- Renamed `TOOL_PERMISSION_NAMES` to `BUILT_IN_TOOL_PERMISSION_NAMES` to clarify it covers only canonical Pi tools
+- Updated schema descriptions for `tools` and `mcp` fields to guide configuration usage
+
+### Removed
+- Removed delegation-specific permission checks (`isDelegationAllowedAgent`, `getDelegationBlockReason`) from permission evaluation
+
+### Tests
+- Added comprehensive test coverage for tool permission lookup behavior
+
 ## [0.2.1] - 2026-03-13
 
 ### Added

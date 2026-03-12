@@ -79,7 +79,7 @@ The extension integrates via Pi's lifecycle hooks:
 **Additional behaviors:**
 - Unknown/unregistered tools are blocked before permission checks (prevents bypass attempts)
 - The `Available tools:` system prompt section is rewritten to match the filtered active tool set
-- The `task` delegation tool is restricted to the `orchestrator` agent only
+- Extension-provided tools like `task`, `mcp`, and third-party tools are handled by exact registered name instead of private built-in hardcodes
 - When a subagent hits an `ask` permission without direct UI access, the request can be forwarded to the main interactive session for confirmation
 - When a subagent triggers an `ask` permission without UI access, the request can be forwarded to the main session and answered there
 
@@ -111,14 +111,14 @@ Both logs write to files only under the extension directory. No debug output is 
 
 The policy file is a JSON object with these sections:
 
-| Section         | Description                              |
-|-----------------|------------------------------------------|
-| `defaultPolicy` | Fallback permissions per category        |
-| `tools`         | Built-in tool permissions                |
-| `bash`          | Command pattern permissions              |
-| `mcp`           | MCP server/tool permissions              |
-| `skills`        | Skill name pattern permissions           |
-| `special`       | Reserved permission checks               |
+| Section         | Description                                         |
+|-----------------|-----------------------------------------------------|
+| `defaultPolicy` | Fallback permissions per category                   |
+| `tools`         | Exact-name tool permissions for registered tools    |
+| `bash`          | Command pattern permissions                         |
+| `mcp`           | MCP server/tool permissions for calls routed through a registered `mcp` tool |
+| `skills`        | Skill name pattern permissions                      |
+| `special`       | Reserved permission checks                          |
 
 > **Note:** Trailing commas are **not** supported. If parsing fails, the extension falls back to `ask` for all categories.
 
@@ -147,7 +147,7 @@ permission:
 
 **Precedence:** Agent frontmatter overrides global config (shallow-merged per section).
 
-**MCP behavior:** `permission.tools.mcp` is the coarse entry/fallback permission for the built-in `mcp` tool. More specific `permission.mcp` target rules override that fallback when they match.
+**MCP behavior:** `permission.tools.mcp` is the coarse entry/fallback permission for a registered `mcp` tool when one is available. More specific `permission.mcp` target rules override that fallback when they match.
 
 **Limitations:** The frontmatter parser is intentionally minimal. Use only `key: value` scalars and nested maps. Avoid arrays, multi-line scalars, and YAML anchors.
 
@@ -173,33 +173,34 @@ Sets fallback permissions when no specific rule matches:
 
 ### `tools`
 
-Controls built-in tools by exact name (no wildcards):
+Controls tools by exact registered name (no wildcards). This is the recommended standalone format for **all** tool entries, including Pi built-ins and arbitrary third-party extension tools.
 
-| Tool    | Description                    |
-|---------|--------------------------------|
-| `bash`  | Shell command execution        |
-| `read`  | File reading                   |
-| `write` | File creation/overwriting      |
-| `edit`  | Surgical file edits            |
-| `grep`  | Pattern searching              |
-| `find`  | File discovery                 |
-| `ls`    | Directory listing              |
-| `mcp`   | MCP proxy tool entry/fallback  |
+| Tool name example     | Description |
+|-----------------------|-------------|
+| `bash`                | Shell command execution (tool-level fallback before `bash` pattern rules) |
+| `read` / `write`      | Canonical Pi built-in file tools |
+| `mcp`                 | Registered MCP proxy tool entry/fallback when available |
+| `task`                | Delegation tool handled like any other registered extension tool |
+| `third_party_tool`    | Arbitrary registered extension tool |
 
 ```jsonc
 {
   "tools": {
     "read": "allow",
     "write": "deny",
-    "edit": "deny",
-    "mcp": "allow"
+    "mcp": "allow",
+    "third_party_tool": "ask"
   }
 }
 ```
 
+Unknown or absent tools are not required in the config. If another extension is not installed, its tool simply will not be registered at runtime, and this extension will block attempts to call that missing tool before permission checks run.
+
 > **Note:** Setting `tools.bash` affects the *default* for bash commands, but `bash` patterns can provide command-level overrides.
 >
-> **Note:** Setting `tools.mcp` controls coarse access to the built-in `mcp` tool. Specific `mcp` rules still override it when a target pattern matches.
+> **Note:** Setting `tools.mcp` controls coarse access to a registered `mcp` tool when one is available. Specific `mcp` rules still override it when a target pattern matches.
+>
+> **Note:** Top-level shorthand is only supported for the canonical Pi built-ins (`bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`) in agent frontmatter. Use `permission.tools.<name>` for `mcp`, `task`, and any third-party tool.
 
 ### `bash`
 
@@ -241,7 +242,7 @@ MCP permissions match against derived targets from tool input. These rules are m
 
 #### MCP Tool Fallback via `tools.mcp`
 
-The `mcp` built-in tool can use `tools.mcp` as an entry permission point. This provides a fallback when no specific MCP pattern matches:
+A registered `mcp` tool can use `tools.mcp` as an entry permission point. This provides a fallback when no specific MCP pattern matches:
 
 ```jsonc
 {
@@ -456,7 +457,7 @@ npx --yes ajv-cli@5 validate \
 |---------|-------|----------|
 | Config not applied (everything asks) | File not found or parse error | Verify file at `~/.pi/agent/pi-permissions.jsonc`; check for trailing commas |
 | Per-agent override not applied | Frontmatter parsing issue | Ensure `---` delimiters at file top; keep YAML simple; restart session |
-| Tool blocked as unregistered | Unknown tool name | Use built-in `mcp` tool for server tools: `{ "tool": "server:tool" }` |
+| Tool blocked as unregistered | Unknown tool name | Use a registered `mcp` tool for server tools: `{ "tool": "server:tool" }` |
 | `/skill:<name>` blocked | Missing context or deny policy | Requires active agent context; `ask` behaves as block in headless mode |
 
 ---

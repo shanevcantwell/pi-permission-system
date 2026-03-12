@@ -128,7 +128,7 @@ runTest("BashFilter uses opencode-style last-match hierarchy", () => {
   assert.equal(generic.matchedPattern, "git *");
 });
 
-runTest("PermissionManager built-in permission checking", () => {
+runTest("PermissionManager canonical built-in permission checking", () => {
   const { manager, cleanup } = createManager({
     defaultPolicy: {
       tools: "deny",
@@ -195,7 +195,7 @@ permission:
   }
 });
 
-runTest("MCP wildcard matching", () => {
+runTest("MCP wildcard matching uses the registered mcp tool", () => {
   const { manager, cleanup } = createManager({
     defaultPolicy: {
       tools: "ask",
@@ -206,24 +206,57 @@ runTest("MCP wildcard matching", () => {
     },
     mcp: {
       "*": "deny",
-      "subagent_*": "ask",
-      "subagent_query-*": "allow",
+      "research_*": "ask",
+      "research_query-*": "allow",
     },
   });
 
   try {
-    const queryDocs = manager.checkPermission("subagent_query-docs", {});
+    const queryDocs = manager.checkPermission("mcp", { tool: "research:query-docs" });
     assert.equal(queryDocs.state, "allow");
     assert.equal(queryDocs.source, "mcp");
-    assert.equal(queryDocs.matchedPattern, "subagent_query-*");
+    assert.equal(queryDocs.matchedPattern, "research_query-*");
+    assert.equal(queryDocs.target, "research_query-docs");
 
-    const resolve = manager.checkPermission("subagent_resolve-context", {});
+    const resolve = manager.checkPermission("mcp", { tool: "research:resolve-context" });
     assert.equal(resolve.state, "ask");
-    assert.equal(resolve.matchedPattern, "subagent_*");
+    assert.equal(resolve.matchedPattern, "research_*");
+    assert.equal(resolve.target, "research_resolve-context");
 
-    const unknown = manager.checkPermission("web_search_provider", {});
+    const unknown = manager.checkPermission("mcp", { tool: "search:provider" });
     assert.equal(unknown.state, "deny");
     assert.equal(unknown.matchedPattern, "*");
+    assert.equal(unknown.target, "search_provider");
+  } finally {
+    cleanup();
+  }
+});
+
+runTest("Arbitrary extension tools use exact-name tool permissions instead of MCP fallback", () => {
+  const { manager, cleanup } = createManager({
+    defaultPolicy: {
+      tools: "deny",
+      bash: "ask",
+      mcp: "allow",
+      skills: "ask",
+      special: "ask",
+    },
+    tools: {
+      third_party_tool: "allow",
+    },
+    mcp: {
+      "*": "deny",
+    },
+  });
+
+  try {
+    const allowed = manager.checkPermission("third_party_tool", {});
+    assert.equal(allowed.state, "allow");
+    assert.equal(allowed.source, "tool");
+
+    const fallback = manager.checkPermission("another_extension_tool", {});
+    assert.equal(fallback.state, "deny");
+    assert.equal(fallback.source, "default");
   } finally {
     cleanup();
   }
@@ -538,7 +571,47 @@ permission:
   }
 });
 
-runTest("task uses tool permissions instead of MCP fallback", () => {
+runTest("Only canonical built-ins support top-level shorthand in agent frontmatter", () => {
+  const { manager, cleanup } = createManager(
+    {
+      defaultPolicy: {
+        tools: "deny",
+        bash: "ask",
+        mcp: "deny",
+        skills: "ask",
+        special: "ask",
+      },
+    },
+    {
+      reviewer: `---
+name: reviewer
+permission:
+  find: allow
+  task: allow
+  mcp: allow
+---
+`,
+    },
+  );
+
+  try {
+    const findResult = manager.checkPermission("find", {}, "reviewer");
+    assert.equal(findResult.state, "allow");
+    assert.equal(findResult.source, "tool");
+
+    const taskResult = manager.checkPermission("task", {}, "reviewer");
+    assert.equal(taskResult.state, "deny");
+    assert.equal(taskResult.source, "default");
+
+    const mcpResult = manager.checkPermission("mcp", { tool: "exa:web_search_exa" }, "reviewer");
+    assert.equal(mcpResult.state, "deny");
+    assert.equal(mcpResult.source, "default");
+  } finally {
+    cleanup();
+  }
+});
+
+runTest("task uses exact-name tool permissions like any registered extension tool", () => {
   const { manager, cleanup } = createManager(
     {
       defaultPolicy: {
@@ -574,7 +647,7 @@ runTest("Tool registry resolves event tool names from string and object payloads
 runTest("Tool registry blocks unregistered tools and handles aliases", () => {
   const registeredTools = [{ toolName: "mcp" }, { toolName: "read" }, { toolName: "bash" }];
 
-  const unknownCheck = checkRequestedToolRegistration("subagent_query-docs", registeredTools);
+  const unknownCheck = checkRequestedToolRegistration("third_party_tool", registeredTools);
   assert.equal(unknownCheck.status, "unregistered");
   if (unknownCheck.status === "unregistered") {
     assert.deepEqual(unknownCheck.availableToolNames, ["bash", "mcp", "read"]);
@@ -587,7 +660,7 @@ runTest("Tool registry blocks unregistered tools and handles aliases", () => {
   assert.equal(missingNameCheck.status, "missing-tool-name");
 });
 
-runTest("getToolPermission returns tool-level deny for agent with bash: deny", () => {
+runTest("getToolPermission returns tool-level policy for canonical and extension tools", () => {
   const { manager, cleanup } = createManager(
     {
       defaultPolicy: {
@@ -599,8 +672,8 @@ runTest("getToolPermission returns tool-level deny for agent with bash: deny", (
       },
     },
     {
-      orchestrator: `---
-name: orchestrator
+      reviewer: `---
+name: reviewer
 permission:
   tools:
     bash: deny
@@ -612,23 +685,18 @@ permission:
   );
 
   try {
-    // Tool-level check for bash should return deny for orchestrator
-    const bashPermission = manager.getToolPermission("bash", "orchestrator");
+    const bashPermission = manager.getToolPermission("bash", "reviewer");
     assert.equal(bashPermission, "deny");
 
-    // Tool-level check for task should return allow
-    const taskPermission = manager.getToolPermission("task", "orchestrator");
+    const taskPermission = manager.getToolPermission("task", "reviewer");
     assert.equal(taskPermission, "allow");
 
-    // Tool-level check for read should return deny
-    const readPermission = manager.getToolPermission("read", "orchestrator");
+    const readPermission = manager.getToolPermission("read", "reviewer");
     assert.equal(readPermission, "deny");
 
-    // When no agent specified, should fall back to default policy
     const defaultBashPermission = manager.getToolPermission("bash");
     assert.equal(defaultBashPermission, "ask");
 
-    // Global config tools setting should work
     const { manager: manager2, cleanup: cleanup2 } = createManager({
       defaultPolicy: {
         tools: "deny",
@@ -648,6 +716,31 @@ permission:
     } finally {
       cleanup2();
     }
+  } finally {
+    cleanup();
+  }
+});
+
+runTest("getToolPermission supports arbitrary extension tool names", () => {
+  const { manager, cleanup } = createManager({
+    defaultPolicy: {
+      tools: "deny",
+      bash: "ask",
+      mcp: "allow",
+      skills: "ask",
+      special: "ask",
+    },
+    tools: {
+      third_party_tool: "allow",
+    },
+  });
+
+  try {
+    const explicitPermission = manager.getToolPermission("third_party_tool");
+    assert.equal(explicitPermission, "allow");
+
+    const fallbackPermission = manager.getToolPermission("missing_extension_tool");
+    assert.equal(fallbackPermission, "deny");
   } finally {
     cleanup();
   }

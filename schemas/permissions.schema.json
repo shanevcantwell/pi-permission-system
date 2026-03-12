@@ -31,12 +31,14 @@
       }
     },
     "tools": {
+      "description": "Exact-name permissions for registered tools. Use this map for the canonical Pi built-ins and any extension-provided or third-party tools.",
       "$ref": "#/$defs/permissionMap"
     },
     "bash": {
       "$ref": "#/$defs/permissionMap"
     },
     "mcp": {
+      "description": "Pattern-based permissions for targets invoked through a registered `mcp` tool when available.",
       "$ref": "#/$defs/permissionMap"
     },
     "skills": {

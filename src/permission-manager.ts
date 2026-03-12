@@ -24,7 +24,7 @@ const AGENTS_DIR = join(homedir(), ".pi", "agent", "agents");
 const LEGACY_GLOBAL_SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
 const GLOBAL_MCP_CONFIG_PATH = join(homedir(), ".pi", "agent", "mcp.json");
 
-const TOOL_PERMISSION_NAMES = new Set(["bash", "read", "write", "edit", "grep", "find", "ls", "mcp", "task"]);
+const BUILT_IN_TOOL_PERMISSION_NAMES = new Set(["bash", "read", "write", "edit", "grep", "find", "ls"]);
 const SPECIAL_PERMISSION_KEYS = new Set(["doom_loop", "external_directory"]);
 const MCP_BASELINE_TARGETS = new Set(["mcp_status", "mcp_list", "mcp_search", "mcp_describe", "mcp_connect"]);
 
@@ -211,7 +211,7 @@ function normalizeRawPermission(raw: unknown): AgentPermissions {
       continue;
     }
 
-    if (TOOL_PERMISSION_NAMES.has(key)) {
+    if (BUILT_IN_TOOL_PERMISSION_NAMES.has(key)) {
       normalized.tools = { ...(normalized.tools || {}), [key]: value };
       continue;
     }
@@ -590,7 +590,10 @@ export class PermissionManager {
    * This is used for tool injection decisions where we need to know if a tool is allowed/denied
    * at the tool level before checking specific command permissions.
    *
-   * @param toolName - The name of the tool (e.g., "bash", "read", "write")
+   * Exact-name entries in `tools` work for arbitrary registered extension tools.
+   * Canonical Pi tools with dedicated categories still use their specialized fallbacks.
+   *
+   * @param toolName - The name of the tool (for example "bash", "read", or a third-party tool name)
    * @param agentName - Optional agent name to check agent-specific permissions
    * @returns The permission state for the tool at the tool level
    */
@@ -598,44 +601,23 @@ export class PermissionManager {
     const { merged } = this.resolvePermissions(agentName);
     const normalizedToolName = toolName.trim();
 
-    // Handle special permission keys (doom_loop, external_directory)
     if (SPECIAL_PERMISSION_KEYS.has(normalizedToolName)) {
       return merged.defaultPolicy.special;
     }
 
-    // Handle skill tool
     if (normalizedToolName === "skill") {
       return merged.defaultPolicy.skills;
     }
 
-    // For bash tool, return the tool-level permission (not command-level)
     if (normalizedToolName === "bash") {
       return merged.tools?.bash || merged.defaultPolicy.bash;
     }
 
-    // Handle mcp tool
     if (normalizedToolName === "mcp") {
       return merged.tools?.mcp || merged.defaultPolicy.mcp;
     }
 
-    // Handle other tool permission names
-    if (TOOL_PERMISSION_NAMES.has(normalizedToolName)) {
-      return merged.tools?.[normalizedToolName] || merged.defaultPolicy.tools;
-    }
-
-    // For MCP tools (qualified names like "server_tool"), check mcp permissions
-    if (normalizedToolName.includes("_")) {
-      const mcpMatch = findCompiledPermissionMatch(
-        compilePermissionPatternsFromSources(this.loadGlobalConfig().mcp, this.loadAgentPermissions(agentName).mcp),
-        normalizedToolName
-      );
-      if (mcpMatch) {
-        return mcpMatch.state;
-      }
-    }
-
-    // Default to the tools default policy
-    return merged.defaultPolicy.tools;
+    return merged.tools?.[normalizedToolName] || merged.defaultPolicy.tools;
   }
 
   checkPermission(toolName: string, input: unknown, agentName?: string): PermissionCheckResult {
@@ -731,7 +713,7 @@ export class PermissionManager {
       };
     }
 
-    if (TOOL_PERMISSION_NAMES.has(normalizedToolName)) {
+    if (BUILT_IN_TOOL_PERMISSION_NAMES.has(normalizedToolName)) {
       return {
         toolName,
         state: merged.tools?.[normalizedToolName] || merged.defaultPolicy.tools,
@@ -739,21 +721,18 @@ export class PermissionManager {
       };
     }
 
-    const mcpMatch = findCompiledPermissionMatch(compiledMcp, toolName);
-    if (mcpMatch) {
+    const explicitToolPermission = merged.tools?.[normalizedToolName];
+    if (explicitToolPermission) {
       return {
         toolName,
-        state: mcpMatch.state,
-        matchedPattern: mcpMatch.matchedPattern,
-        target: mcpMatch.matchedName,
-        source: "mcp",
+        state: explicitToolPermission,
+        source: "tool",
       };
     }
 
     return {
       toolName,
-      state: merged.defaultPolicy.mcp || "deny",
-      target: toolName,
+      state: merged.defaultPolicy.tools,
       source: "default",
     };
   }

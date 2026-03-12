@@ -27,8 +27,6 @@ const LEGACY_PERMISSION_FORWARDING_RESPONSES_DIR = join(LEGACY_PERMISSION_FORWAR
 const PERMISSION_FORWARDING_POLL_INTERVAL_MS = 250;
 const PERMISSION_FORWARDING_TIMEOUT_MS = 10 * 60 * 1000;
 const SUBAGENT_ENV_HINT_KEYS = ["PI_IS_SUBAGENT", "PI_SUBAGENT_SESSION_ID", "PI_AGENT_ROUTER_SUBAGENT"] as const;
-const ORCHESTRATOR_AGENT_NAME = "orchestrator";
-const DELEGATION_TOOL_NAME = "task";
 
 const AVAILABLE_SKILLS_OPEN_TAG = "<available_skills>";
 const AVAILABLE_SKILLS_CLOSE_TAG = "</available_skills>";
@@ -377,15 +375,6 @@ function getActiveAgentNameFromSystemPrompt(systemPrompt: string | undefined): s
   return normalizeAgentName(match[1]);
 }
 
-function isDelegationAllowedAgent(agentName: string | null): boolean {
-  return Boolean(agentName && agentName.toLowerCase() === ORCHESTRATOR_AGENT_NAME);
-}
-
-function getDelegationBlockReason(agentName: string | null): string {
-  const resolvedAgent = agentName ?? "none";
-  return `Tool '${DELEGATION_TOOL_NAME}' is restricted to '${ORCHESTRATOR_AGENT_NAME}'. Active agent '${resolvedAgent}' cannot delegate.`;
-}
-
 function formatMissingToolNameReason(): string {
   return "Tool call was blocked because no tool name was provided. Use a registered tool name from pi.getAllTools().";
 }
@@ -397,7 +386,7 @@ function formatUnknownToolReason(toolName: string, availableToolNames: readonly 
 
   const mcpHint = toolName === "mcp"
     ? ""
-    : " If this was intended as an MCP server tool, call the built-in 'mcp' tool (for example: {\"tool\":\"server:tool\"}).";
+    : " If this was intended as an MCP server tool, call the registered 'mcp' tool when available (for example: {\"tool\":\"server:tool\"}).";
 
   return `Tool '${toolName}' is not registered in this runtime and was blocked before permission checks.${mcpHint} Registered tools: ${availableList}.`;
 }
@@ -1080,10 +1069,6 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   };
 
   const shouldExposeTool = (toolName: string, agentName: string | null): boolean => {
-    if (toolName === DELEGATION_TOOL_NAME && !isDelegationAllowedAgent(agentName)) {
-      return false;
-    }
-
     // Use tool-level permission check for tool injection decisions
     // This ensures that agent-specific tool deny rules (e.g., bash: deny) are respected
     // before any command-level permissions are considered
@@ -1232,10 +1217,6 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
         block: true,
         reason: formatUnknownToolReason(registrationCheck.requestedToolName, registrationCheck.availableToolNames),
       };
-    }
-
-    if (toolName === DELEGATION_TOOL_NAME && !isDelegationAllowedAgent(agentName)) {
-      return { block: true, reason: getDelegationBlockReason(agentName) };
     }
 
     if (isToolCallEventType("read", event) && activeSkillEntries.length > 0) {
