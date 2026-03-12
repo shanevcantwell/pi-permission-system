@@ -4,6 +4,12 @@ import { homedir } from "node:os";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 
 import { toRecord } from "./common.js";
+import {
+  DEFAULT_EXTENSION_CONFIG,
+  loadPermissionSystemConfig,
+  type PermissionSystemExtensionConfig,
+} from "./extension-config.js";
+import { createPermissionSystemLogger } from "./logging.js";
 import { PermissionManager } from "./permission-manager.js";
 import { sanitizeAvailableToolsSection } from "./system-prompt-sanitizer.js";
 import { checkRequestedToolRegistration, getToolNameFromValue } from "./tool-registry.js";
@@ -66,6 +72,66 @@ type PermissionForwardingLocation = {
   responsesDir: string;
   label: "primary" | "legacy";
 };
+
+type PermissionRequestSource = "tool_call" | "skill_input" | "skill_read";
+type PermissionRequestState = "waiting" | "approved" | "denied";
+
+type PermissionRequestEvent = {
+  requestId: string;
+  source: PermissionRequestSource;
+  state: PermissionRequestState;
+  message: string;
+  toolCallId?: string;
+  toolName?: string;
+  skillName?: string;
+  path?: string;
+  command?: string;
+  target?: string;
+  agentName?: string | null;
+};
+
+const PERMISSION_REQUEST_EVENT_CHANNEL = "pi-permission-system:permission-request";
+
+let extensionConfig: PermissionSystemExtensionConfig = { ...DEFAULT_EXTENSION_CONFIG };
+const extensionLogger = createPermissionSystemLogger({
+  getConfig: () => extensionConfig,
+});
+const reportedLoggingWarnings = new Set<string>();
+let loggingWarningReporter: ((message: string) => void) | null = null;
+
+function setExtensionConfig(config: PermissionSystemExtensionConfig): void {
+  extensionConfig = {
+    debugLog: config.debugLog,
+    permissionReviewLog: config.permissionReviewLog,
+  };
+}
+
+function setLoggingWarningReporter(reporter: ((message: string) => void) | null): void {
+  loggingWarningReporter = reporter;
+}
+
+function reportLoggingWarning(message: string): void {
+  if (!loggingWarningReporter || reportedLoggingWarnings.has(message)) {
+    return;
+  }
+
+  reportedLoggingWarnings.add(message);
+  loggingWarningReporter(message);
+}
+
+function writeDebugLog(event: string, details: Record<string, unknown> = {}): void {
+  const warning = extensionLogger.debug(event, details);
+  if (warning) {
+    reportLoggingWarning(warning);
+  }
+}
+
+function writeReviewLog(event: string, details: Record<string, unknown> = {}): void {
+  const warning = extensionLogger.review(event, details);
+  if (warning) {
+    reportLoggingWarning(warning);
+  }
+}
 
 function decodeXml(value: string): string {
   return value
@@ -410,6 +476,13 @@ function formatSkillPathDenyReason(skill: SkillPromptEntry, readPath: string, ag
   return `${subject} is not permitted to access skill '${skill.name}' via '${readPath}'.`;
 }
 
+function getPermissionLogContext(result: PermissionCheckResult): { command?: string; target?: string } {
+  return {
+    command: result.command,
+    target: result.target,
+  };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -467,21 +540,21 @@ function isErrnoCode(error: unknown, code: string): boolean {
 }
 
 function logPermissionForwardingWarning(message: string, error?: unknown): void {
-  if (typeof error === "undefined") {
-    console.warn(`[pi-permission-system] ${message}`);
-    return;
-  }
+  const details = typeof error === "undefined"
+    ? { message }
+    : { message, error: formatUnknownErrorMessage(error) };
 
-  console.warn(`[pi-permission-system] ${message}: ${formatUnknownErrorMessage(error)}`);
+  writeReviewLog("permission_forwarding.warning", details);
+  writeDebugLog("permission_forwarding.warning", details);
 }
 
 function logPermissionForwardingError(message: string, error?: unknown): void {
-  if (typeof error === "undefined") {
-    console.error(`[pi-permission-system] ${message}`);
-    return;
-  }
+  const details = typeof error === "undefined"
+    ? { message }
+    : { message, error: formatUnknownErrorMessage(error) };
 
-  console.error(`[pi-permission-system] ${message}: ${formatUnknownErrorMessage(error)}`);
+  writeReviewLog("permission_forwarding.error", details);
+  writeDebugLog("permission_forwarding.error", details);
 }
 
 function ensureDirectoryExists(path: string, description: string): boolean {
@@ -685,6 +758,14 @@ async function waitForForwardedPermissionApproval(ctx: ExtensionContext, message
   const requestPath = join(PERMISSION_FORWARDING_REQUESTS_DIR, `${requestId}.json`);
   const responsePath = join(PERMISSION_FORWARDING_RESPONSES_DIR, `${requestId}.json`);
 
+  writeReviewLog("forwarded_permission.request_created", {
+    requestId,
+    requesterAgentName,
+    requesterSessionId: request.requesterSessionId,
+    requestPath,
+    responsePath,
+  });
+
   try {
     writeJsonFileAtomic(requestPath, request);
   } catch (error) {
@@ -696,6 +777,12 @@ async function waitForForwardedPermissionApproval(ctx: ExtensionContext, message
   while (Date.now() < deadline) {
     if (existsSync(responsePath)) {
       const response = readForwardedPermissionResponse(responsePath);
+      writeReviewLog("forwarded_permission.response_received", {
+        requestId,
+        approved: response?.approved ?? null,
+        responderSessionId: response?.responderSessionId ?? null,
+        responsePath,
+      });
       safeDeleteFile(responsePath, "forwarded permission response");
       safeDeleteFile(requestPath, "forwarded permission request");
       return Boolean(response?.approved);
@@ -705,6 +792,11 @@ async function waitForForwardedPermissionApproval(ctx: ExtensionContext, message
   }
 
   logPermissionForwardingWarning(`Timed out waiting for forwarded permission response '${responsePath}'`);
+  writeReviewLog("forwarded_permission.response_timed_out", {
+    requestId,
+    requesterAgentName,
+    responsePath,
+  });
   safeDeleteFile(requestPath, "forwarded permission request");
   return false;
 }
@@ -738,6 +830,14 @@ async function processForwardedPermissionRequests(ctx: ExtensionContext): Promis
         continue;
       }
 
+      writeReviewLog("forwarded_permission.prompted", {
+        requestId: request.id,
+        source: location.label,
+        requesterAgentName: request.requesterAgentName,
+        requesterSessionId: request.requesterSessionId,
+        requestPath,
+      });
+
       let approved = false;
       try {
         approved = await ctx.ui.confirm("Permission Required (Subagent)", formatForwardedPermissionPrompt(request));
@@ -751,6 +851,13 @@ async function processForwardedPermissionRequests(ctx: ExtensionContext): Promis
       }
 
       const responsePath = join(location.responsesDir, `${request.id}.json`);
+      writeReviewLog(approved ? "forwarded_permission.approved" : "forwarded_permission.denied", {
+        requestId: request.id,
+        source: location.label,
+        requesterAgentName: request.requesterAgentName,
+        requesterSessionId: request.requesterSessionId,
+        responsePath,
+      });
       try {
         writeJsonFileAtomic(responsePath, {
           approved,
@@ -788,6 +895,139 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   let permissionForwardingContext: ExtensionContext | null = null;
   let permissionForwardingTimer: NodeJS.Timeout | null = null;
   let isProcessingForwardedRequests = false;
+  let runtimeContext: ExtensionContext | null = null;
+  let lastConfigWarning: string | null = null;
+
+  const notifyWarning = (message: string): void => {
+    if (!runtimeContext?.hasUI) {
+      return;
+    }
+
+    runtimeContext.ui.notify(message, "warning");
+  };
+
+  const refreshExtensionConfig = (ctx?: ExtensionContext): void => {
+    if (ctx) {
+      runtimeContext = ctx;
+    }
+
+    const result = loadPermissionSystemConfig();
+    setExtensionConfig(result.config);
+
+    if (result.warning && result.warning !== lastConfigWarning) {
+      lastConfigWarning = result.warning;
+      notifyWarning(result.warning);
+    } else if (!result.warning) {
+      lastConfigWarning = null;
+    }
+
+    writeDebugLog("config.loaded", {
+      created: result.created,
+      warning: result.warning ?? null,
+      debugLog: result.config.debugLog,
+      permissionReviewLog: result.config.permissionReviewLog,
+    });
+  };
+
+  setLoggingWarningReporter(notifyWarning);
+  refreshExtensionConfig();
+
+  const createPermissionRequestId = (prefix: string): string => {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${process.pid}`;
+  };
+
+  const emitPermissionRequestEvent = (event: PermissionRequestEvent): void => {
+    try {
+      pi.events.emit(PERMISSION_REQUEST_EVENT_CHANNEL, event);
+    } catch (error) {
+      writeDebugLog("permission_request.event_emit_failed", {
+        requestId: event.requestId,
+        source: event.source,
+        state: event.state,
+        error: formatUnknownErrorMessage(error),
+      });
+    }
+  };
+
+  const reviewPermissionDecision = (
+    event: string,
+    details: {
+      requestId: string;
+      source: PermissionRequestSource;
+      agentName: string | null;
+      message: string;
+      toolCallId?: string;
+      toolName?: string;
+      skillName?: string;
+      path?: string;
+      command?: string;
+      target?: string;
+      resolution?: string;
+    },
+  ): void => {
+    writeReviewLog(event, {
+      requestId: details.requestId,
+      source: details.source,
+      agentName: details.agentName,
+      message: details.message,
+      toolCallId: details.toolCallId ?? null,
+      toolName: details.toolName ?? null,
+      skillName: details.skillName ?? null,
+      path: details.path ?? null,
+      command: details.command ?? null,
+      target: details.target ?? null,
+      resolution: details.resolution ?? null,
+    });
+  };
+
+  const promptPermission = async (
+    ctx: ExtensionContext,
+    details: {
+      requestId: string;
+      source: PermissionRequestSource;
+      agentName: string | null;
+      message: string;
+      toolCallId?: string;
+      toolName?: string;
+      skillName?: string;
+      path?: string;
+      command?: string;
+      target?: string;
+    },
+  ): Promise<boolean> => {
+    reviewPermissionDecision("permission_request.waiting", details);
+    emitPermissionRequestEvent({
+      requestId: details.requestId,
+      source: details.source,
+      state: "waiting",
+      message: details.message,
+      toolCallId: details.toolCallId,
+      toolName: details.toolName,
+      skillName: details.skillName,
+      path: details.path,
+      command: details.command,
+      target: details.target,
+      agentName: details.agentName,
+    });
+
+    const approved = await confirmPermission(ctx, details.message);
+    reviewPermissionDecision(approved ? "permission_request.approved" : "permission_request.denied", details);
+    emitPermissionRequestEvent({
+      requestId: details.requestId,
+      source: details.source,
+      state: approved ? "approved" : "denied",
+      message: details.message,
+      toolCallId: details.toolCallId,
+      toolName: details.toolName,
+      skillName: details.skillName,
+      path: details.path,
+      command: details.command,
+      target: details.target,
+      agentName: details.agentName,
+    });
+
+    return approved;
+  };
 
   const stopForwardedPermissionPolling = (): void => {
     if (permissionForwardingTimer) {
@@ -852,6 +1092,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    runtimeContext = ctx;
+    refreshExtensionConfig(ctx);
     permissionManager = new PermissionManager();
     activeSkillEntries = [];
     lastKnownActiveAgentName = getActiveAgentName(ctx);
@@ -859,16 +1101,21 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_switch", async (_event, ctx) => {
+    runtimeContext = ctx;
+    refreshExtensionConfig(ctx);
     activeSkillEntries = [];
     lastKnownActiveAgentName = getActiveAgentName(ctx);
     startForwardedPermissionPolling(ctx);
   });
 
   pi.on("session_shutdown", async () => {
+    runtimeContext = null;
     stopForwardedPermissionPolling();
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    runtimeContext = ctx;
+    refreshExtensionConfig(ctx);
     startForwardedPermissionPolling(ctx);
     const agentName = resolveAgentName(ctx, event.systemPrompt);
     const allTools = pi.getAllTools();
@@ -899,6 +1146,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("input", async (event, ctx) => {
+    runtimeContext = ctx;
     startForwardedPermissionPolling(ctx);
     const skillName = extractSkillNameFromInput(event.text);
     if (!skillName) {
@@ -911,6 +1159,12 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       if (ctx.hasUI) {
         ctx.ui.notify(`Skill '${skillName}' is blocked because active agent context is unavailable.`, "warning");
       }
+      writeReviewLog("permission_request.blocked", {
+        source: "skill_input",
+        skillName,
+        agentName: null,
+        resolution: "missing_agent_context",
+      });
       return { action: "handled" };
     }
 
@@ -921,15 +1175,35 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
         const resolvedAgent = agentName ?? "none";
         ctx.ui.notify(`Skill '${skillName}' is not permitted for agent '${resolvedAgent}'.`, "warning");
       }
+      writeReviewLog("permission_request.blocked", {
+        source: "skill_input",
+        skillName,
+        agentName,
+        resolution: "policy_denied",
+      });
       return { action: "handled" };
     }
 
     if (check.state === "ask") {
+      const message = formatSkillAskPrompt(skillName, agentName ?? undefined);
       if (!canRequestPermissionConfirmation(ctx)) {
+        writeReviewLog("permission_request.blocked", {
+          source: "skill_input",
+          skillName,
+          agentName,
+          message,
+          resolution: "confirmation_unavailable",
+        });
         return { action: "handled" };
       }
 
-      const approved = await confirmPermission(ctx, formatSkillAskPrompt(skillName, agentName ?? undefined));
+      const approved = await promptPermission(ctx, {
+        requestId: createPermissionRequestId("skill-input"),
+        source: "skill_input",
+        agentName,
+        message,
+        skillName,
+      });
       if (!approved) {
         return { action: "handled" };
       }
@@ -939,6 +1213,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    runtimeContext = ctx;
     startForwardedPermissionPolling(ctx);
     const agentName = resolveAgentName(ctx);
     const toolName = getEventToolName(event);
@@ -969,6 +1244,13 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
       if (matchedSkill) {
         if (matchedSkill.state === "deny") {
+          writeReviewLog("permission_request.blocked", {
+            source: "skill_read",
+            skillName: matchedSkill.name,
+            agentName,
+            path: event.input.path,
+            resolution: "policy_denied",
+          });
           return {
             block: true,
             reason: formatSkillPathDenyReason(matchedSkill, event.input.path, agentName ?? undefined),
@@ -976,17 +1258,32 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
         }
 
         if (matchedSkill.state === "ask") {
+          const message = formatSkillPathAskPrompt(matchedSkill, event.input.path, agentName ?? undefined);
           if (!canRequestPermissionConfirmation(ctx)) {
+            writeReviewLog("permission_request.blocked", {
+              source: "skill_read",
+              skillName: matchedSkill.name,
+              agentName,
+              path: event.input.path,
+              message,
+              resolution: "confirmation_unavailable",
+            });
             return {
               block: true,
               reason: `Accessing skill '${matchedSkill.name}' requires approval, but no interactive UI is available.`,
             };
           }
 
-          const approved = await confirmPermission(
-            ctx,
-            formatSkillPathAskPrompt(matchedSkill, event.input.path, agentName ?? undefined),
-          );
+          const approved = await promptPermission(ctx, {
+            requestId: event.toolCallId,
+            source: "skill_read",
+            agentName,
+            message,
+            toolCallId: event.toolCallId,
+            toolName: toolName,
+            skillName: matchedSkill.name,
+            path: event.input.path,
+          });
           if (!approved) {
             return { block: true, reason: `User denied access to skill '${matchedSkill.name}'.` };
           }
@@ -996,8 +1293,17 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
     const input = getEventInput(event);
     const check = permissionManager.checkPermission(toolName, input, agentName ?? undefined);
+    const permissionLogContext = getPermissionLogContext(check);
 
     if (check.state === "deny") {
+      writeReviewLog("permission_request.blocked", {
+        source: "tool_call",
+        toolCallId: event.toolCallId,
+        toolName,
+        agentName,
+        ...permissionLogContext,
+        resolution: "policy_denied",
+      });
       return { block: true, reason: formatDenyReason(check, agentName ?? undefined) };
     }
 
@@ -1008,14 +1314,32 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
           ? "Using tool 'mcp' requires approval, but no interactive UI is available."
           : `Using tool '${toolName}' requires approval, but no interactive UI is available.`;
 
+      const message = formatAskPrompt(check, agentName ?? undefined);
       if (!canRequestPermissionConfirmation(ctx)) {
+        writeReviewLog("permission_request.blocked", {
+          source: "tool_call",
+          toolCallId: event.toolCallId,
+          toolName,
+          agentName,
+          message,
+          ...permissionLogContext,
+          resolution: "confirmation_unavailable",
+        });
         return {
           block: true,
           reason: unavailableReason,
         };
       }
 
-      const approved = await confirmPermission(ctx, formatAskPrompt(check, agentName ?? undefined));
+      const approved = await promptPermission(ctx, {
+        requestId: event.toolCallId,
+        source: "tool_call",
+        agentName,
+        message,
+        toolCallId: event.toolCallId,
+        toolName,
+        ...permissionLogContext,
+      });
       if (!approved) {
         return { block: true, reason: formatUserDeniedReason(check) };
       }

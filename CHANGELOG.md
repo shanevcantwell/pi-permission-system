@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-03-13
+
+### Added
+- Extension configuration system (`config.json`) with `debugLog` and `permissionReviewLog` options
+- JSONL debug logging to `logs/pi-permission-system-debug.jsonl` when `debugLog` is enabled
+- JSONL permission review logging to `logs/pi-permission-system-permission-review.jsonl` for auditing
+- Permission request event emission on `pi-permission-system:permission-request` channel for external consumers
+- New `extension-config.ts` module for config file management and path resolution
+- New `logging.ts` module with `createPermissionSystemLogger` for structured log output
+
+### Changed
+- Replaced `console.warn`/`console.error` calls with structured logging to file
+- Permission forwarding now logs request creation, response received, timeout, and user prompts
+- Updated README documentation to cover extension config, logging, and event emission
+
 ## [0.2.0] - 2026-03-12
 
 ### Added

@@ -3,6 +3,7 @@ node_modules/
 .DS_Store
 dist/
 coverage/
-config.json
+logs/
 *.tmp
 docs/
+config.json

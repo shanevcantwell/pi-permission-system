@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BashFilter } from "./bash-filter.js";
+import { DEFAULT_EXTENSION_CONFIG, loadPermissionSystemConfig } from "./extension-config.js";
+import { createPermissionSystemLogger } from "./logging.js";
 import { PermissionManager } from "./permission-manager.js";
 import { checkRequestedToolRegistration, getToolNameFromValue } from "./tool-registry.js";
 import type { GlobalPermissionConfig } from "./types.js";
@@ -46,6 +48,61 @@ function runTest(name: string, testFn: () => void): void {
   testFn();
   console.log(`[PASS] ${name}`);
 }
+
+runTest("Permission-system extension config defaults debug off and review log on", () => {
+  const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-config-"));
+  const configPath = join(baseDir, "config.json");
+
+  try {
+    const result = loadPermissionSystemConfig(configPath);
+    assert.equal(result.created, true);
+    assert.equal(result.warning, undefined);
+    assert.deepEqual(result.config, DEFAULT_EXTENSION_CONFIG);
+    assert.equal(existsSync(configPath), true);
+
+    const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    assert.equal(raw.debugLog, false);
+    assert.equal(raw.permissionReviewLog, true);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+runTest("Permission-system logger respects debug toggle and keeps review log enabled by default", () => {
+  const baseDir = mkdtempSync(join(tmpdir(), "pi-permission-system-logs-"));
+  const logsDir = join(baseDir, "logs");
+  const debugLogPath = join(logsDir, "debug.jsonl");
+  const reviewLogPath = join(logsDir, "review.jsonl");
+  const config = { ...DEFAULT_EXTENSION_CONFIG };
+  const logger = createPermissionSystemLogger({
+    getConfig: () => config,
+    debugLogPath,
+    reviewLogPath,
+    ensureLogsDirectory: () => {
+      mkdirSync(logsDir, { recursive: true });
+      return undefined;
+    },
+  });
+
+  try {
+    const initialDebugWarning = logger.debug("debug.disabled", { sample: true });
+    const reviewWarning = logger.review("permission_request.waiting", { toolName: "write" });
+
+    assert.equal(initialDebugWarning, undefined);
+    assert.equal(reviewWarning, undefined);
+    assert.equal(existsSync(debugLogPath), false);
+    assert.equal(existsSync(reviewLogPath), true);
+    assert.match(readFileSync(reviewLogPath, "utf8"), /permission_request\.waiting/);
+
+    config.debugLog = true;
+    const enabledDebugWarning = logger.debug("debug.enabled", { sample: true });
+    assert.equal(enabledDebugWarning, undefined);
+    assert.equal(existsSync(debugLogPath), true);
+    assert.match(readFileSync(debugLogPath, "utf8"), /debug\.enabled/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
 
 runTest("BashFilter uses opencode-style last-match hierarchy", () => {
   const filter = new BashFilter(

@@ -1,6 +1,6 @@
 # 🔐 pi-permission-system
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Permission enforcement extension for the Pi coding agent that provides centralized, deterministic permission gates for tool, bash, MCP, skill, and special operations.
@@ -17,6 +17,8 @@ Permission enforcement extension for the Pi coding agent that provides centraliz
 - **Skill Protection** — Controls which skills can be loaded or read from disk
 - **Per-Agent Overrides** — Agent-specific permission policies via YAML frontmatter
 - **Subagent Permission Forwarding** — Forwards `ask` confirmations from non-UI subagents back to the main interactive session
+- **File-Based Review Logging** — Writes permission request/denial review entries to a file by default for later auditing
+- **Optional Debug Logging** — Keeps verbose extension diagnostics in a separate file when enabled in `config.json`
 - **JSON Schema Validation** — Full schema for editor autocomplete and config validation
 
 ## Installation
@@ -82,6 +84,26 @@ The extension integrates via Pi's lifecycle hooks:
 - When a subagent triggers an `ask` permission without UI access, the request can be forwarded to the main session and answered there
 
 ## Configuration
+
+### Extension Config File
+
+**Location:** `~/.pi/agent/extensions/pi-permission-system/config.json`
+
+The extension creates this file automatically when it is missing. It controls only extension-local logging behavior:
+
+```json
+{
+  "debugLog": false,
+  "permissionReviewLog": true
+}
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `debugLog` | `false` | Enables verbose diagnostic logging to `logs/pi-permission-system-debug.jsonl` |
+| `permissionReviewLog` | `true` | Enables the permission request/denial review log at `logs/pi-permission-system-permission-review.jsonl` |
+
+Both logs write to files only under the extension directory. No debug output is printed to the terminal.
 
 ### Global Policy File
 
@@ -352,12 +374,25 @@ When a delegated or routed subagent runs without direct UI access, `ask` permiss
 
 This keeps `ask` policies usable even when the original permission check happens inside a non-UI execution context.
 
+### Logging
+
+When the extension prompts, denies, or forwards permission requests, it can append structured JSONL entries under:
+
+```text
+~/.pi/agent/extensions/pi-permission-system/logs/
+```
+
+- `pi-permission-system-permission-review.jsonl` — enabled by default for permission review/audit history
+- `pi-permission-system-debug.jsonl` — disabled by default and intended for troubleshooting
+
 ### Architecture
 
 ```
 index.ts                    → Root Pi entrypoint shim
 src/
-├── index.ts                → Extension bootstrap, permission checks, and subagent forwarding
+├── index.ts                → Extension bootstrap, permission checks, review logging, and subagent forwarding
+├── extension-config.ts     → Extension-local config loading and default creation
+├── logging.ts              → File-only debug/review logging helpers
 ├── permission-manager.ts   → Policy loading, merging, and resolution with caching
 ├── bash-filter.ts          → Bash command wildcard pattern matching
 ├── wildcard-matcher.ts     → Shared wildcard pattern compilation and matching
@@ -366,9 +401,9 @@ src/
 ├── types.ts                → TypeScript type definitions
 └── test.ts                 → Test runner
 schemas/
-└── permissions.schema.json → JSON Schema for config validation
+└── permissions.schema.json → JSON Schema for policy validation
 config/
-└── config.example.json     → Starter configuration template
+└── config.example.json     → Starter global policy template
 ```
 
 #### Module Organization
