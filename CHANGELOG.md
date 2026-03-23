@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-03-24
+
+### Added
+- Permission system status module (`status.ts`) to expose yolo mode status to the UI
+- `syncPermissionSystemStatus()` function to sync status with the TUI status bar
+- `PERMISSION_SYSTEM_STATUS_KEY` and `PERMISSION_SYSTEM_YOLO_STATUS_VALUE` constants for status identification
+
+### Changed
+- Integrated status sync on config load, config save, and extension unload
+- Status is only exposed when yolo mode is enabled
+
+### Tests
+- Added test for permission-system status being undefined when yolo mode is disabled and "yolo" when enabled
+
 ## [0.3.0] - 2026-03-23
 
 ### Added

@@ -29,6 +29,7 @@ import { PermissionManager } from "./permission-manager.js";
 import { sanitizeAvailableToolsSection } from "./system-prompt-sanitizer.js";
 import { checkRequestedToolRegistration, getToolNameFromValue } from "./tool-registry.js";
 import type { PermissionCheckResult, PermissionState } from "./types.js";
+import { PERMISSION_SYSTEM_STATUS_KEY, syncPermissionSystemStatus } from "./status.js";
 import { canResolveAskPermissionRequest, shouldAutoApprovePermissionState } from "./yolo-mode.js";
 
 const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
@@ -906,6 +907,10 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     const result = loadPermissionSystemConfig();
     setExtensionConfig(result.config);
 
+    if (runtimeContext?.hasUI) {
+      syncPermissionSystemStatus(runtimeContext, result.config);
+    }
+
     if (result.warning && result.warning !== lastConfigWarning) {
       lastConfigWarning = result.warning;
       notifyWarning(result.warning);
@@ -933,6 +938,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     }
 
     setExtensionConfig(normalized);
+    syncPermissionSystemStatus(ctx, normalized);
     lastConfigWarning = null;
 
     writeDebugLog("config.saved", {
@@ -1142,6 +1148,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
+    runtimeContext?.ui.setStatus(PERMISSION_SYSTEM_STATUS_KEY, undefined);
     runtimeContext = null;
     stopForwardedPermissionPolling();
   });

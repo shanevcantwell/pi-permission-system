@@ -13,6 +13,7 @@ import {
 } from "./permission-forwarding.js";
 import { PermissionManager } from "./permission-manager.js";
 import { checkRequestedToolRegistration, getToolNameFromValue } from "./tool-registry.js";
+import { getPermissionSystemStatus } from "./status.js";
 import type { GlobalPermissionConfig } from "./types.js";
 import { canResolveAskPermissionRequest, shouldAutoApprovePermissionState } from "./yolo-mode.js";
 
@@ -195,6 +196,14 @@ runTest("Yolo mode resolves ask permissions without UI or delegation forwarding"
       isSubagent: true,
     }),
     true,
+  );
+});
+
+runTest("Permission-system status is only exposed when yolo mode is enabled", () => {
+  assert.equal(getPermissionSystemStatus(DEFAULT_EXTENSION_CONFIG), undefined);
+  assert.equal(
+    getPermissionSystemStatus({ ...DEFAULT_EXTENSION_CONFIG, yoloMode: true }),
+    "yolo",
   );
 });
 
