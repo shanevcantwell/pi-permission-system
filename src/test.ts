@@ -14,6 +14,7 @@ import {
 import { PermissionManager } from "./permission-manager.js";
 import { checkRequestedToolRegistration, getToolNameFromValue } from "./tool-registry.js";
 import { getPermissionSystemStatus } from "./status.js";
+import { sanitizeAvailableToolsSection } from "./system-prompt-sanitizer.js";
 import type { GlobalPermissionConfig } from "./types.js";
 import { canResolveAskPermissionRequest, shouldAutoApprovePermissionState } from "./yolo-mode.js";
 
@@ -205,6 +206,64 @@ runTest("Permission-system status is only exposed when yolo mode is enabled", ()
     getPermissionSystemStatus({ ...DEFAULT_EXTENSION_CONFIG, yoloMode: true }),
     "yolo",
   );
+});
+
+runTest("System prompt sanitizer removes the Available tools section and surrounding boilerplate", () => {
+  const prompt = [
+    "Available tools:",
+    "- read: Read file contents",
+    "- mcp: Discover, inspect, and call MCP tools across configured servers",
+    "",
+    "In addition to the tools above, you may have access to other custom tools depending on the project.",
+    "",
+    "Guidelines:",
+    "- Use mcp for MCP discovery first: search by capability, describe one exact tool name, then call it.",
+    "- Be concise in your responses",
+  ].join("\n");
+
+  const result = sanitizeAvailableToolsSection(prompt, ["read", "mcp"]);
+
+  assert.equal(result.removed, true);
+  assert.equal(result.prompt.includes("Available tools:"), false);
+  assert.equal(result.prompt.includes("In addition to the tools above"), false);
+  assert.match(result.prompt, /Guidelines:/);
+  assert.match(result.prompt, /Use mcp for MCP discovery first/i);
+});
+
+runTest("System prompt sanitizer removes denied tool guidelines while keeping global guidance", () => {
+  const prompt = [
+    "Guidelines:",
+    "- Use task when work SHOULD be delegated to one or more specialized agents instead of handled entirely in the current session.",
+    "- Use mcp for MCP discovery first: search by capability, describe one exact tool name, then call it.",
+    "- Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)",
+    "- Be concise in your responses",
+    "- Show file paths clearly when working with files",
+  ].join("\n");
+
+  const result = sanitizeAvailableToolsSection(prompt, ["bash", "grep", "mcp"]);
+
+  assert.equal(result.removed, true);
+  assert.equal(result.prompt.includes("Use task when work SHOULD"), false);
+  assert.match(result.prompt, /Use mcp for MCP discovery first/i);
+  assert.match(result.prompt, /Prefer grep\/find\/ls tools over bash/i);
+  assert.match(result.prompt, /Be concise in your responses/);
+  assert.match(result.prompt, /Show file paths clearly when working with files/);
+});
+
+runTest("System prompt sanitizer removes inactive built-in write guidance", () => {
+  const prompt = [
+    "Guidelines:",
+    "- Use write only for new files or complete rewrites",
+    "- When summarizing your actions, output plain text directly - do NOT use cat or bash to display what you did",
+    "- Be concise in your responses",
+  ].join("\n");
+
+  const result = sanitizeAvailableToolsSection(prompt, ["read"]);
+
+  assert.equal(result.removed, true);
+  assert.equal(result.prompt.includes("Use write only for new files or complete rewrites"), false);
+  assert.equal(result.prompt.includes("do NOT use cat or bash to display what you did"), false);
+  assert.match(result.prompt, /Be concise in your responses/);
 });
 
 runTest("Permission-system logger respects debug toggle and keeps review log enabled by default", () => {

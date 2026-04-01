@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-01
+
+### Added
+- System prompt sanitizer now removes inactive tool guidelines from the `Guidelines:` section
+- Guideline filtering based on allowed tools (e.g., removes task/mcp/bash/write guidance when tools are denied)
+- New `TOOL_GUIDELINE_RULES` configuration for extensible guideline filtering
+- Helper functions: `findSection()`, `removeLineSection()`, `sanitizeGuidelinesSection()`
+
+### Changed
+- Updated `@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui` peer dependencies to ^0.64.0
+- Updated `@sinclair/typebox` peer dependency to ^0.34.49
+- Refactored system prompt sanitizer to handle both `Available tools:` and `Guidelines:` sections
+
+### Tests
+- Added tests for system prompt sanitizer removing Available tools section
+- Added tests for guideline filtering based on allowed tools
+- Added tests for inactive built-in write/edit/task/mcp guidance removal
+
 ## [0.3.1] - 2026-03-24
 
 ### Added
