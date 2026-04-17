@@ -907,7 +907,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
     const result = loadPermissionSystemConfig();
     setExtensionConfig(result.config);
-    lastActiveTools = null; // Reset to force tool recalculation when config changes
+    // Don't reset lastActiveTools here - it's called on every turn and would defeat the caching fix
 
     if (runtimeContext?.hasUI) {
       syncPermissionSystemStatus(runtimeContext, result.config);
