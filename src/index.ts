@@ -1174,13 +1174,11 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
     pi.setActiveTools(allowedTools);
 
-    const toolPromptResult = sanitizeAvailableToolsSection(event.systemPrompt, allowedTools);
-    const skillPromptResult = resolveSkillPromptEntries(toolPromptResult.prompt, permissionManager, agentName, ctx.cwd);
+    // Track skill entries for read-tool gating without mutating system prompt.
+    // System prompt mutation causes cache invalidation on every turn (see llama.cpp logs showing n_past=3).
+    // Actual permission enforcement happens at tool_call time, so sanitization is redundant.
+    const skillPromptResult = resolveSkillPromptEntries(event.systemPrompt, permissionManager, agentName, ctx.cwd);
     activeSkillEntries = skillPromptResult.entries;
-
-    if (skillPromptResult.prompt !== event.systemPrompt) {
-      return { systemPrompt: skillPromptResult.prompt };
-    }
 
     return {};
   });
