@@ -890,6 +890,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   let isProcessingForwardedRequests = false;
   let runtimeContext: ExtensionContext | null = null;
   let lastConfigWarning: string | null = null;
+  let lastActiveTools: string[] | null = null;
 
   const notifyWarning = (message: string): void => {
     if (!runtimeContext?.hasUI) {
@@ -906,6 +907,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
     const result = loadPermissionSystemConfig();
     setExtensionConfig(result.config);
+    lastActiveTools = null; // Reset to force tool recalculation when config changes
 
     if (runtimeContext?.hasUI) {
       syncPermissionSystemStatus(runtimeContext, result.config);
@@ -1136,6 +1138,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     permissionManager = new PermissionManager();
     activeSkillEntries = [];
     lastKnownActiveAgentName = getActiveAgentName(ctx);
+    lastActiveTools = null;
     startForwardedPermissionPolling(ctx);
   });
 
@@ -1144,6 +1147,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     refreshExtensionConfig(ctx);
     activeSkillEntries = [];
     lastKnownActiveAgentName = getActiveAgentName(ctx);
+    lastActiveTools = null;
     startForwardedPermissionPolling(ctx);
   });
 
@@ -1172,7 +1176,16 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       }
     }
 
-    pi.setActiveTools(allowedTools);
+    // Only call setActiveTools if the tool list has changed to avoid unnecessary system prompt rebuilds
+    // System prompt rebuilds read AGENTS.md fresh from disk, causing cache invalidation if the file changed
+    const toolsChanged = !lastActiveTools || 
+      lastActiveTools.length !== allowedTools.length || 
+      lastActiveTools.some((tool, i) => tool !== allowedTools[i]);
+    
+    if (toolsChanged) {
+      pi.setActiveTools(allowedTools);
+      lastActiveTools = [...allowedTools];
+    }
 
     // Track skill entries for read-tool gating without mutating system prompt.
     // System prompt mutation causes cache invalidation on every turn (see llama.cpp logs showing n_past=3).
